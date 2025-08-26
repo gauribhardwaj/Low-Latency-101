@@ -1,6 +1,18 @@
 # Low-Latency-101
 The Universal Low Latency Runbook: Resilient Performance Across Languages
 
+
+## 🚀 Run the Streamlit UI
+
+```bash
+python -m pip install streamlit
+pip install -r requirements.txt
+streamlit run app.py
+
+
+
+
+
 This repository provides practical examples and best practices for writing low-latency code in multiple programming languages.
 It includes performance profiling guides, before/after examples, and a universal latency optimization checklist.
 """
