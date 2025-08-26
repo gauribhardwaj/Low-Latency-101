@@ -1,0 +1,20 @@
+[
+  {
+    "rule": "Malloc in Loop",
+    "pattern": "for\\s*\\(.*\\)\\s*\\{[^}]*malloc",
+    "penalty": 25,
+    "message": "Avoid malloc inside loops — use stack allocation or preallocated memory."
+  },
+  {
+    "rule": "Cout in Loop",
+    "pattern": "for\\s*\\(.*\\)\\s*\\{[^}]*std::cout",
+    "penalty": 15,
+    "message": "Avoid printing inside loops — I/O is slow and blocks CPU."
+  },
+  {
+    "rule": "New in Loop",
+    "pattern": "for\\s*\\(.*\\)\\s*\\{[^}]*new\\s+\\w+",
+    "penalty": 20,
+    "message": "Avoid object creation inside tight loops — prefer pooling."
+  }
+]
