@@ -1,0 +1,5 @@
+🐍 Python Sample — Hot loop + print + list alloc
+
+for i in range(10000):
+    print("Iteration", i)                   
+    result = [x * x for x in range(1000)]    

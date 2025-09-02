@@ -1,0 +1,9 @@
+☕ Java Sample — System.out + new in loop
+public class LatencyTest {
+    public static void main(String[] args) {
+        for (int i = 0; i < 10000; i++) {
+            System.out.println("Logging: " + i); 
+            Object obj = new Object();          
+        }
+    }
+}
