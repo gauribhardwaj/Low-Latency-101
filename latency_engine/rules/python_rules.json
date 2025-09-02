@@ -1,0 +1,20 @@
+[
+  {
+    "rule": "Print in Loop",
+    "pattern": "for\\s+\\w+\\s+in\\s+.*:\\s*\\n\\s*print",
+    "penalty": 10,
+    "message": "Avoid printing in loops — it causes I/O latency."
+  },
+  {
+    "rule": "Dynamic Allocation in Loop",
+    "pattern": "for\\s+\\w+\\s+in\\s+.*:\\s*\\n\\s*\\w+\\s*=\\s*\\[.*\\]",
+    "penalty": 15,
+    "message": "Avoid creating new lists inside loops — pre-allocate or reuse them."
+  },
+  {
+    "rule": "Function Call in Loop",
+    "pattern": "for\\s+\\w+\\s+in\\s+.*:\\s*\\n\\s*\\w+\\(.*\\)",
+    "penalty": 5,
+    "message": "Function calls in tight loops can introduce latency — batch if possible."
+  }
+]

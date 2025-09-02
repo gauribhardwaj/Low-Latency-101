@@ -1,0 +1,14 @@
+[
+  {
+    "rule": "GC Allocation in Loop",
+    "pattern": "for\\s*\\(.*\\)\\s*\\{[^}]*new\\s+\\w+",
+    "penalty": 20,
+    "message": "Avoid using `new` inside loops. Pre-allocate or use pooling."
+  },
+  {
+    "rule": "System.out.println in Loop",
+    "pattern": "for\\s*\\(.*\\)\\s*\\{[^}]*System\\.out\\.println",
+    "penalty": 15,
+    "message": "Avoid I/O operations in tight loops."
+  }
+]
