@@ -1,0 +1,12 @@
+💻 C++ Sample — malloc + cout in loop
+#include <iostream>
+#include <cstdlib>
+using namespace std;
+
+int main() {
+    for (int i = 0; i < 10000; i++) {
+        int* arr = (int*)malloc(100 * sizeof(int)); 
+        cout << "Processing: " << i << endl;        
+    }
+    return 0;
+}
