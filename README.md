@@ -133,7 +133,7 @@ pip install -r requirements.txt
 
 ## 📬 Contact
 
-For feedback or collaborations, reach out on [LinkedIn](https://www.linkedin.com/in/gauribhardwaj) or file an issue.
+For feedback or collaborations, reach out on [LinkedIn](https://www.linkedin.com/in/gauribhardwaj7) or file an issue.
 
 ---
 
