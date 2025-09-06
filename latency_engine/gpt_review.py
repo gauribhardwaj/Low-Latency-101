@@ -23,15 +23,14 @@ def query_llm_with_code(code, language):
 
     prompt = f"""You're a senior performance engineer.
 
-Please review the following {language} code for latency-related bottlenecks:
-- GC pressure
-- memory allocation in hot loops
-- I/O in tight paths
-- branch misprediction
-- data layout
-- thread contention
+Your job is to give a **tight, tactical review** of this {language} code. DO NOT write essays or detailed explanations.
 
-Explain each problem in plain language, suggest fixes, and if possible, rewrite the code with improvements.
+Instead:
+1. 🔍 List latency bottlenecks you find (short, bulleted format)
+2. ⚙️ For each issue, suggest a fix (in code or principle)
+3. 🧱 Rewrite the code if needed, cleanly and briefly
+
+Be brutally efficient. Focus only on performance. Assume the reader is an engineer.
 
 Code:
 ```{language.lower()}
