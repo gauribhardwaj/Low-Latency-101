@@ -1,0 +1,56 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'me.champeau.jmh' version '0.7.2'
+}
+
+group = 'com.lowlatency'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform('io.netty:netty-bom:4.1.114.Final')
+    implementation 'io.netty:netty-transport'
+    implementation 'io.netty:netty-buffer'
+    implementation 'io.netty:netty-resolver'
+    implementation 'io.netty:netty-handler'
+    implementation 'io.netty:netty-codec'
+    runtimeOnly  'io.netty:netty-transport-native-epoll'
+
+    implementation 'org.agrona:agrona:1.21.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+
+    // (Optional) JMH explicit deps; plugin can manage, but we keep pins for reproducibility.
+    jmh 'org.openjdk.jmh:jmh-core:1.37'
+    jmh 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+}
+
+application {
+    mainClass = 'com.lowlatency.packet.OneCorePacketServer'
+}
+
+tasks.test { useJUnitPlatform() }
+
+// JMH tuning defaults (edit as needed)
+jmh {
+    fork = 2
+    warmupIterations = 5
+    iterations = 8
+    forceGC = true
+    timeOnIteration = '500ms'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}

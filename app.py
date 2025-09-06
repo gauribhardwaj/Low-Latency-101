@@ -13,64 +13,70 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 api_key = os.getenv("OPENROUTER_API_KEY")
 
-# Page setup
+#  Streamlit Page Config
 st.set_page_config(page_title="Low Latency 101", layout="wide")
-st.title("🚀 Universal Low Latency Runbook")
-st.subheader("🔍 Paste your code below for a low-latency performance review")
 
-# Language & Code
-language = st.selectbox("Select Programming Language", ["Python", "Java", "C++"])
-code_input = st.text_area("Paste your code here", height=300)
+# --- Title ---
+st.markdown("## 🚀 Universal Low Latency Runbook")
+st.markdown("Optimize your code for speed, memory, and execution in one click.")
 
-# Track button click via session_state
-if "analyze_clicked" not in st.session_state:
-    st.session_state["analyze_clicked"] = False
 
-# Main button
-if st.button("🧠 Analyze Code"):
-    st.session_state["analyze_clicked"] = True
+# --- Layout ---
+col1, col2 = st.columns([1.5, 2.5])
 
-# After Analyze Button is clicked
-if st.session_state["analyze_clicked"]:
+# --- Left: Code Editor ---
+with col1:
+    st.markdown("### 📝 Code Snippet")
+    language = st.selectbox("Language", ["Python", "Java", "C++"])
+    code_input = st.text_area("Paste your code below", height=450, placeholder="Write or paste your code here...")
 
-    if not code_input.strip():
-        st.warning("⚠️ Please paste some code before analyzing.")
-        st.session_state["analyze_clicked"] = False  # Reset state
-    else:
-        analyzer = LatencyAnalyzer(language)
-        results = analyzer.analyze(code_input)
+    run_analysis = st.button("🔍 Analyze Code")
 
-        st.success("✅ Static Analysis Completed!")
+# --- Right: Tabs ---
+with col2:
+    tab1, tab2, tab3 = st.tabs(["🧪 Static Analyzer", "🤖 GPT Reviewer", "⚙️ Run Code"])
 
-        if results["issues"]:
-            st.markdown("### 🔥 Latency Issues Detected")
-            for issue in results["issues"]:
-                st.error(f"🚨 {issue['rule']}: {issue['message']}")
-        else:
-            st.success("🎉 No major latency issues detected!")
-
-        st.markdown(f"### 🧪 Performance Score: `{results['score']}/100`")
-
-        # GPT Review checkbox appears AFTER static analysis
-        enable_gpt = st.checkbox("🤖 Enhance with GPT Review (DeepSeek via OpenRouter)")
-
-        if enable_gpt:
-            logger.info("🤖 GPT checkbox is selected, calling LLM...")
-            if not api_key:
-                st.error("❌ API key not found.")
+    # --- Tab 1: Static Analyzer ---
+    with tab1:
+        if run_analysis:
+            if not code_input.strip():
+                st.warning("⚠️ Paste your code first.")
             else:
-                with st.spinner("💬 Asking DeepSeek for a review..."):
-                    try:
-                        gpt_response = query_llm_with_code(code_input, language)
-                        if gpt_response.startswith("❌"):
-                            st.error(gpt_response)
-                        else:
-                            st.markdown("### 🤖 DeepSeek LLM Suggestions")
-                            st.code(gpt_response)
-                    except Exception as e:
-                        st.error(f"❌ GPT call failed: {e}")
-                        logger.exception("GPT call failed")
+                analyzer = LatencyAnalyzer(language)
+                results = analyzer.analyze(code_input)
 
-# Footer
-st.markdown("---")
-st.markdown("Built with ❤️ by Gauri | [GitHub Repo](https://github.com/gauribhardwaj/Low-Latency-101)")
+                st.success("✅ Static Analysis Completed")
+                st.markdown(f"**Score:** `{results['score']}/100`")
+
+                if results["issues"]:
+                    with st.expander("⚠️ Detected Issues"):
+                        for issue in results["issues"]:
+                            st.error(f"{issue['rule']}: {issue['message']}")
+                else:
+                    st.success("🎉 No major issues found.")
+
+    # --- Tab 2: GPT Reviewer ---
+    with tab2:
+        if run_analysis:
+            if not code_input.strip():
+                st.warning("⚠️ Paste your code first.")
+            elif not api_key:
+                st.error("❌ API key missing in `.env`.")
+            else:
+                with st.spinner("Asking GPT to review..."):
+                    gpt_response = query_llm_with_code(code_input, language)
+
+                if gpt_response.startswith("✅"):
+                    st.success(gpt_response)
+                elif gpt_response.startswith("❌"):
+                    st.error(gpt_response)
+                else:
+                    st.markdown("### 🧠 Suggestions")
+                    st.code(gpt_response, language='markdown')
+
+    # --- Tab 3: Runtime Tester (placeholder for Phase 2) ---
+    with tab3:
+        st.info("⚙️ Runtime test environment coming soon in Sprint 2 Phase 2.")
+        st.markdown("- Secure code runner")
+        st.markdown("- Output + Error box")
+        st.markdown("- Input parameters")
