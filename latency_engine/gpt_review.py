@@ -178,6 +178,8 @@ def query_llm_with_code(code: str, language: str) -> str:
         "temperature": GEN_CFG.get("temperature", 0.2),
         "top_p": GEN_CFG.get("top_p", 0.9),
         "max_tokens": GEN_CFG.get("max_tokens", 900),
+        # Ask for strict JSON if the provider supports it (OpenAI-compatible param).
+        "response_format": {"type": "json_object"},
     }
 
     try:
@@ -196,7 +198,8 @@ def query_llm_with_code(code: str, language: str) -> str:
     if not text:
         return f"❌ Empty response from LLM: {json.dumps(data)[:400]}"
 
-    # Try to extract JSON and normalize it; otherwise, return raw text.
+    # Try to extract JSON and normalize it; otherwise, return a JSON fallback
+    # so the UI can render structured sections instead of plain text.
     parsed = _safe_parse_json(text)
     if parsed is not None:
         try:
@@ -206,4 +209,14 @@ def query_llm_with_code(code: str, language: str) -> str:
             # Fall through to raw text if normalization fails
             pass
 
-    return text
+    # Fallback: wrap raw text into the expected JSON shape
+    fallback = {
+        "summary": text.strip()[:1200],
+        "no_changes": False,
+        "clean_findings": [],
+        "minor_issues": [],
+        "major_issues": [],
+        "rewritten": "",
+        "confidence": 0.0,
+    }
+    return json.dumps(fallback)
