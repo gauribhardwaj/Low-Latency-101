@@ -61,6 +61,16 @@ with col_right:
                 else:
                     st.success("No major latency issues detected by the static rules.")
 
+                # Positive signals
+                try:
+                    positives = (results.get("signals") or {}).get("positive") or []
+                except Exception:
+                    positives = []
+                if positives:
+                    with st.expander("Positive Signals (good patterns)", expanded=True):
+                        for p in positives:
+                            st.success(f"+ {p}")
+
     # --- Tab 2: GPT Reviewer ---
     with tab_gpt:
         gpt_btn = st.button("🤖 Run GPT Review", type="primary", use_container_width=True)
