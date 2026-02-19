@@ -1,0 +1,17 @@
+rules:
+  - id: RR-001
+    title: Avoid blocking I/O on hot paths
+    severity: major
+    why: Blocking I/O amplifies tail latency.
+    fix: Move to async / background worker.
+  - id: RR-002
+    title: Reduce per-request allocations
+    severity: minor
+    why: Allocation churn increases GC pressure.
+    fix: Reuse buffers/objects; avoid large intermediates.
+playbooks:
+  - signature: "Timeout"
+    steps:
+      - "Check p95/p99 trend around first-seen timestamp."
+      - "Compare deploy diff since last stable."
+      - "Look for downstream dependency latency spikes."

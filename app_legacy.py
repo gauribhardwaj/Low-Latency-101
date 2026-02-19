@@ -5,8 +5,8 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from latency_engine import LatencyAnalyzer
-from latency_engine.gpt_review import query_llm_with_code
+from core.latency_engine import LatencyAnalyzer
+from core.latency_engine.gpt_review import query_llm_with_code
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

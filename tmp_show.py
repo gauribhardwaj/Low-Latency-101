@@ -1,5 +1,5 @@
 import json
-from latency_engine.engine import LatencyAnalyzer
+from core.latency_engine.engine import LatencyAnalyzer
 
 def run():
     samples = [
