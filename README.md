@@ -1,142 +1,87 @@
-# 🚀 Universal Low Latency Runbook
+# Low-Latency-101
 
-This project helps developers **analyze code snippets** for potential **latency bottlenecks** using:
-- A rule-based **static analyzer**
-- An optional LLM-powered **GPT reviewer** via **OpenRouter.ai**
+Low-Latency-101 is a release-readiness gate for latency risk.
 
-Built with ❤️ by [Gauri Bhardwaj](https://github.com/gauribhardwaj)
+It combines:
+- Static code checks (Python, Java, C++)
+- LLM review for latency-focused findings
+- A simple queue-based backend for async analysis
 
----
+## Repo Layout
 
-## 📸 Demo
-![screenshot](https://github.com/gauribhardwaj/Low-Latency-101/assets/demo.png)
+- `core/latency_engine/` - static analyzer + GPT review logic
+- `services/api/` - FastAPI service for job submission/polling
+- `services/worker/` - worker that runs static + GPT analysis
+- `mcp/runbook/` - runbook rules service (FastAPI)
+- `ui/streamlit_app.py` - Streamlit frontend for the release gate
+- `app_legacy.py` - older single-process Streamlit app
 
----
+## Quick Start
 
-## 📂 Project Structure
+### 1) Prerequisites
 
-```
-Low-Latency-101/
-│
-├── app.py                            # 🔵 Main Streamlit UI
-├── .env                              # 🔐 Your API key (not checked in)
-├── latency_engine/
-│   ├── __init__.py
-│   ├── gpt_review.py                 # 🤖 GPT LLM handler
-│   └── latency_analyzer.py          # 🧠 Rule-based static analysis engine
-│
-├── latency_engine/rules/
-│   ├── python_rules.json
-│   ├── java_rules.json
-│   └── cpp_rules.json               # 🔍 Language-specific rules
-│
-├── requirements.txt                 # 📦 Python dependencies
-└── README.md                        # 📘 You're here!
-```
+- Docker Desktop
+- Python 3.11+ (for local UI)
+- OpenRouter API key
 
----
+### 2) Add `.env`
 
-## 💻 Run Locally
-
-### ✅ 1. Clone the repo
-
-```bash
-git clone https://github.com/gauribhardwaj/Low-Latency-101.git
-cd Low-Latency-101
-```
-
-### ✅ 2. Create a virtual environment (optional but recommended)
-
-```bash
-python -m venv venv
-source venv/bin/activate       # On Mac/Linux
-venv\Scripts\activate        # On Windows
-```
-
-### ✅ 3. Install Python dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### ✅ 4. Get OpenRouter API Key
-
-1. Go to [https://openrouter.ai](https://openrouter.ai)
-2. Login → Get your **API key** (starts with `sk-or-...`)
-3. Copy it.
-
-Create a `.env` file in the project root:
+Create `.env` in repo root:
 
 ```env
-OPENROUTER_API_KEY=sk-or-your-api-key-here
+OPENROUTER_API_KEY=sk-or-your-key
 ```
 
-> ⚠️ This file should **not be committed**. It's already added in `.gitignore`.
-
-### ✅ 5. Run the app
+### 3) Start backend services
 
 ```bash
-streamlit run app.py
+docker compose up --build -d
 ```
 
-### ✅ 6. Use the UI
+This starts:
+- Redis on `localhost:6379`
+- Runbook MCP service on `localhost:8787`
+- API on `localhost:8000`
+- Worker (background)
 
-1. Select the language: `Python`, `Java`, or `C++`
-2. Paste your code snippet
-3. Click **"Analyze Code"** to run the static engine
-4. (Optional) Tick ✅ the **GPT Review** checkbox to get suggestions from DeepSeek (via OpenRouter)
-
----
-
-## 🧠 Sample Code (Python)
-
-```python
-for i in range(10000):
-    print("Iteration", i)
-    result = [x * x for x in range(1000)]
-```
-
-**Static Output**:
-- ❌ I/O in hot loop
-- ❌ List allocations per iteration
-- Score: 70/100
-
-**GPT Output** (DeepSeek):
-- Use generator expressions
-- Cache function calls
-- Buffer print statements
-
----
-
-## 🧰 Dependencies
-
-- `streamlit`
-- `requests`
-- `dotenv`
-- `re`, `json`, `os`, `logging`
-
-Install via:
+### 4) Start UI
 
 ```bash
 pip install -r requirements.txt
+streamlit run ui/streamlit_app.py
 ```
 
----
+Optional if API is not on localhost:
 
-## 📡 Optional: Deploy to Streamlit Cloud
+```bash
+set API_BASE=http://localhost:8000
+```
 
-1. Push this repo to GitHub
-2. Go to [streamlit.io/cloud](https://streamlit.io/cloud) and deploy it
-3. Add your `OPENROUTER_API_KEY` as a **secret**
+## Basic API Usage
 
----
+Health checks:
 
-## 📬 Contact
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/health/worker
+```
 
-For feedback or collaborations, reach out on [LinkedIn](https://www.linkedin.com/in/gauribhardwaj7) or file an issue.
+Create a job:
 
----
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"language":"python","code":"print(1)","mode":"release_readiness","context":{}}'
+```
 
-## 🛡️ License
+Poll result:
 
-MIT License © [gauribhardwaj](https://github.com/gauribhardwaj)
+```bash
+curl http://localhost:8000/jobs/<job_id>
+```
+
+## Stop
+
+```bash
+docker compose down
+```

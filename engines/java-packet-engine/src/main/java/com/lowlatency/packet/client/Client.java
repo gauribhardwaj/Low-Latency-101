@@ -3,7 +3,6 @@ package com.lowlatency.packet.client;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ThreadLocalRandom;
 
 /** Tiny client to blast lines to the server. */

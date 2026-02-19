@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mcp_runbook:
+    build:
+      context: .
+      dockerfile: mcp/runbook/Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      - RUNBOOK_PATH=/app/runbook.yaml
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - mcp_runbook
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MCP_RUNBOOK_URL=http://mcp_runbook:8787
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+    depends_on:
+      - redis
+      - mcp_runbook

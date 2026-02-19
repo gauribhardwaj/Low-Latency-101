@@ -2,6 +2,7 @@ import json
 import os
 import re
 import logging
+from pathlib import Path
 from typing import Dict, List
 
 from .detectors import PythonDetector, JavaDetector, CppDetector
@@ -14,15 +15,26 @@ class LatencyAnalyzer:
         self.language = language
         self.rules = self.load_rules(language)
 
-    def load_rules(self, lang):
-        lname = (lang or "").lower()
-        if lname in ("c++", "cxx"):
-            lname = "cpp"
-        path = f"latency_engine/rules/{lname}_rules.json"
-        with open(path, "r") as f:
+    def load_rules(self, language: str):
+        # Resolve rules relative to this file, not CWD
+        base_dir = Path(__file__).resolve().parent
+        rules_dir = base_dir / "rules"
+
+        filename = f"{language}_rules.json"
+        path = rules_dir / filename
+
+        if not path.exists():
+            raise FileNotFoundError(f"Rules file not found: {path}")
+
+        with path.open("r", encoding="utf-8") as f:
             rules = json.load(f)
         try:
-            logger.info("LatencyAnalyzer: loaded %d rules for %s from %s", len(rules), lname, path)
+            logger.info(
+                "LatencyAnalyzer: loaded %d rules for %s from %s",
+                len(rules),
+                language,
+                path,
+            )
         except Exception:
             pass
         return rules
