@@ -13,6 +13,17 @@ services:
     environment:
       - RUNBOOK_PATH=/app/runbook.yaml
 
+  mcp_github:
+    build:
+      context: .
+      dockerfile: mcp/github/Dockerfile
+    ports:
+      - "8788:8788"
+    env_file:
+      - .env
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+
   api:
     build:
       context: .
@@ -34,7 +45,9 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - MCP_RUNBOOK_URL=http://mcp_runbook:8787
+      - MCP_GITHUB_URL=http://mcp_github:8788
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
     depends_on:
       - redis
       - mcp_runbook
+      - mcp_github

@@ -6,6 +6,7 @@ It combines:
 - Static code checks (Python, Java, C++)
 - LLM review for latency-focused findings
 - A simple queue-based backend for async analysis
+- MCP services for runbooks and public GitHub repository ingestion
 
 ## Repo Layout
 
@@ -13,6 +14,7 @@ It combines:
 - `services/api/` - FastAPI service for job submission/polling
 - `services/worker/` - worker that runs static + GPT analysis
 - `mcp/runbook/` - runbook rules service (FastAPI)
+- `mcp/github/` - GitHub MCP service (FastAPI) for public repo tree/file access
 - `ui/streamlit_app.py` - Streamlit frontend for the release gate
 - `app_legacy.py` - older single-process Streamlit app
 
@@ -30,6 +32,8 @@ Create `.env` in repo root:
 
 ```env
 OPENROUTER_API_KEY=sk-or-your-key
+# Optional, increases GitHub API limits for MCP GitHub service:
+GITHUB_TOKEN=ghp_or_github_pat
 ```
 
 ### 3) Start backend services
@@ -41,6 +45,7 @@ docker compose up --build -d
 This starts:
 - Redis on `localhost:6379`
 - Runbook MCP service on `localhost:8787`
+- GitHub MCP service on `localhost:8788`
 - API on `localhost:8000`
 - Worker (background)
 
@@ -78,6 +83,14 @@ Poll result:
 
 ```bash
 curl http://localhost:8000/jobs/<job_id>
+```
+
+Create a GitHub repo job:
+
+```bash
+curl -X POST http://localhost:8000/jobs/github \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url":"https://github.com/psf/requests","ref":"main","paths":["requests/"],"extensions":[".py"],"max_files":30}'
 ```
 
 ## Stop
