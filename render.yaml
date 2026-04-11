@@ -1,0 +1,65 @@
+services:
+  # ── MCP Runbook ─────────────────────────────────────────────────────────────
+  - type: web
+    name: ll101-mcp-runbook
+    runtime: docker
+    dockerfilePath: ./mcp/runbook/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /rules
+    envVars:
+      - key: RUNBOOK_PATH
+        value: /app/runbook.yaml
+
+  # ── MCP GitHub ──────────────────────────────────────────────────────────────
+  - type: web
+    name: ll101-mcp-github
+    runtime: docker
+    dockerfilePath: ./mcp/github/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false   # paste your GitHub token in Render dashboard
+
+  # ── API (public-facing) ─────────────────────────────────────────────────────
+  - type: web
+    name: ll101-api
+    runtime: docker
+    dockerfilePath: ./services/api/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ll101-redis
+          property: connectionString
+
+  # ── Worker ──────────────────────────────────────────────────────────────────
+  - type: worker
+    name: ll101-worker
+    runtime: docker
+    dockerfilePath: ./services/worker/Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ll101-redis
+          property: connectionString
+      - key: MCP_RUNBOOK_URL
+        value: https://ll101-mcp-runbook.onrender.com
+      - key: MCP_GITHUB_URL
+        value: https://ll101-mcp-github.onrender.com
+      - key: OPENROUTER_API_KEY
+        sync: false   # paste your OpenRouter key in Render dashboard
+
+databases:
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  - name: ll101-redis
+    type: redis
+    plan: free
