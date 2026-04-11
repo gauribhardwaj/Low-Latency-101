@@ -3,6 +3,7 @@ import json
 import time
 import logging
 from typing import Any, Dict, Optional, List
+
 import requests
 
 # ---------- Logging ----------
@@ -13,15 +14,17 @@ if not logger.handlers:
 # ---------- Config ----------
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL_DEFAULT = "deepseek/deepseek-chat-v3-0324"
-GEN_CFG = {"temperature": 0.2, "max_tokens": 900, "top_p": 0.9}
+GEN_CFG = {"temperature": 0.2, "max_tokens": 700, "top_p": 0.9}
 TIMEOUT_SEC = 30
 MAX_RETRIES = 2
 RETRY_BACKOFF_SEC = 1.5
 
+# Lines of context to include around each flagged line when building snippets
+SNIPPET_CONTEXT = 12
+
 
 # ---------- Helpers ----------
 def _get_api_key() -> str:
-    """Fetch the OpenRouter API key dynamically each call."""
     key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not key:
         try:
@@ -33,12 +36,10 @@ def _get_api_key() -> str:
 
 
 def _get_model() -> str:
-    """Fetch model name or fallback to default."""
     return (os.getenv("OPENROUTER_MODEL") or OPENROUTER_MODEL_DEFAULT).strip()
 
 
 def _post_with_retries(headers: Dict[str, str], body: Dict[str, Any]) -> requests.Response:
-    """Make API calls with retries and exponential backoff."""
     last_exc: Optional[BaseException] = None
     for attempt in range(1, MAX_RETRIES + 2):
         try:
@@ -55,7 +56,6 @@ def _post_with_retries(headers: Dict[str, str], body: Dict[str, Any]) -> request
 
 
 def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
-    """Try to extract JSON from model output (even if wrapped in extra text)."""
     try:
         return json.loads(text)
     except Exception:
@@ -63,29 +63,68 @@ def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
             start = text.find("{")
             end = text.rfind("}")
             if start != -1 and end != -1:
-                return json.loads(text[start : end + 1])
+                return json.loads(text[start: end + 1])
         except Exception:
             return None
     return None
 
 
 def _normalize_result(obj: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize model output structure."""
     return {
         "summary": str(obj.get("summary", "")).strip(),
         "no_changes": bool(obj.get("no_changes", False)),
         "clean_findings": list(obj.get("clean_findings", []))[:10],
         "minor_issues": list(obj.get("minor_issues", []))[:10],
         "major_issues": list(obj.get("major_issues", []))[:10],
-        "rewritten": str(obj.get("rewritten", "")).strip(),
+        "patches": list(obj.get("patches", []))[:15],
+        "rewritten": "",  # no longer used — kept for backwards compat
         "confidence": float(obj.get("confidence", 0.0)),
     }
 
 
-def _build_messages(code: str, language: str) -> List[Dict[str, str]]:
-    """Build structured prompt per language."""
+def _extract_snippets(code: str, flagged_lines: List[int], context: int = SNIPPET_CONTEXT) -> str:
+    """Return only the lines around flagged issues instead of the full file.
+
+    If the snippets cover >70% of the file anyway, just return the full code.
+    Each snippet is prefixed with line numbers so the LLM can reference them.
+    """
+    code_lines = code.splitlines()
+    n = len(code_lines)
+    if not flagged_lines or n == 0:
+        return "\n".join(f"{i+1:4d}: {ln}" for i, ln in enumerate(code_lines))
+
+    # Build set of line indices to include
+    indices: set = set()
+    for ln in flagged_lines:
+        lo = max(0, ln - context - 1)
+        hi = min(n, ln + context)
+        indices.update(range(lo, hi))
+
+    # If snippets cover most of the file, send the whole thing (already small)
+    if len(indices) >= n * 0.7:
+        return "\n".join(f"{i+1:4d}: {ln}" for i, ln in enumerate(code_lines))
+
+    # Build snippet with separators between non-contiguous ranges
+    result: List[str] = []
+    prev = -2
+    for i in sorted(indices):
+        if i > prev + 1:
+            result.append(f"     # ... lines {prev + 2}–{i} omitted ...")
+        result.append(f"{i+1:4d}: {code_lines[i]}")
+        prev = i
+    return "\n".join(result)
+
+
+def _build_messages(code: str, language: str, flagged_lines: Optional[List[int]] = None) -> List[Dict[str, str]]:
+    """Build a cost-efficient prompt.
+
+    Instead of sending the full file, we send only the snippets around flagged lines.
+    The LLM returns surgical patches (line number + original → replacement) rather
+    than a full rewrite — much cheaper in both input and output tokens.
+    """
     lang = (language or "").strip() or "Python"
     lang_lower = lang.lower()
+
     hints = {
         "Python": (
             "- Avoid print/log in hot loops; prefer buffering or batching.\n"
@@ -104,35 +143,47 @@ def _build_messages(code: str, language: str) -> List[Dict[str, str]]:
         ),
     }
 
+    snippet = _extract_snippets(code, flagged_lines or [], SNIPPET_CONTEXT)
+    lines_sent = snippet.count("\n") + 1
+    total_lines = code.count("\n") + 1
+    context_note = (
+        f"(showing {lines_sent}/{total_lines} lines around flagged locations)"
+        if lines_sent < total_lines else ""
+    )
+
     system_msg = (
         "You are a battle-tested low-latency systems engineer. "
         "Be concise and return only valid JSON with no extra text."
     )
 
     user_msg = (
-        f"Evaluate this {lang} code for latency issues only.\n\n"
+        f"Review this {lang} code for latency issues. {context_note}\n\n"
         "Check for:\n"
-        "- Allocation/GC pressure or frequent small allocations\n"
+        "- Allocation/GC pressure\n"
         "- I/O or syscalls in tight loops\n"
-        "- Cache locality / false sharing\n"
-        "- Branch misprediction risks\n"
         "- Lock contention / atomics misuse\n"
+        "- Cache unfriendly access patterns\n"
         "- CPU-unfriendly constructs\n"
-        "- Algorithmic hotspots\n"
         "- Vectorization/batching opportunities\n\n"
-        f"Language notes:\n{hints.get(lang, '')}\n\n"
-        "Return STRICT JSON exactly in this schema:\n"
+        f"Language notes:\n{hints.get(lang, '')}\n"
+        "Return STRICT JSON with this exact schema:\n"
         "{\n"
-        '  "summary": "...",\n'
+        '  "summary": "one sentence",\n'
         '  "no_changes": true|false,\n'
         '  "clean_findings": ["..."],\n'
         '  "minor_issues": [{"issue":"...","why":"...","fix":"...","snippet":"..."}],\n'
         '  "major_issues": [{"issue":"...","why":"...","fix":"...","snippet":"..."}],\n'
-        '  "rewritten": "REQUIRED: full rewritten version of the code fixing all issues found above. Must not be empty if any issues were found.",\n'
+        '  "patches": [\n'
+        '    {"line": <line_number>, "original": "<exact line from code>", "replacement": "<fixed line>", "why": "<short reason>"}\n'
+        '  ],\n'
         '  "confidence": 0.0\n'
         "}\n\n"
-        "Code:\n"
-        f"```{lang_lower}\n{code}\n```\n"
+        "Rules for patches:\n"
+        "- One patch per issue found\n"
+        "- 'original' must be the exact line from the code (copy it verbatim)\n"
+        "- 'replacement' is the fixed single line (or a few lines if needed)\n"
+        "- Skip patch if the fix requires a large architectural change\n\n"
+        f"Code:\n```{lang_lower}\n{snippet}\n```\n"
     )
 
     return [
@@ -155,11 +206,13 @@ def _extract_choice_text(resp_json: Dict[str, Any]) -> str:
     return ""
 
 
-def query_llm_with_code(code: str, language: str) -> str:
+def query_llm_with_code(code: str, language: str, flagged_lines: Optional[List[int]] = None) -> str:
     """Call OpenRouter for a latency-focused review.
 
-    Returns a JSON string (normalized) when possible, otherwise raw text. Hard errors
-    return a string beginning with '❌' so the UI can display them directly.
+    flagged_lines: line numbers from static analysis — used to send only
+    the relevant code snippets instead of the full file, cutting token cost.
+
+    Returns a JSON string (normalized) or raw text on error.
     """
     key = _get_api_key()
     if not key:
@@ -171,14 +224,13 @@ def query_llm_with_code(code: str, language: str) -> str:
         "Content-Type": "application/json",
     }
 
-    messages = _build_messages(code, language)
+    messages = _build_messages(code, language, flagged_lines)
     body: Dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": GEN_CFG.get("temperature", 0.2),
         "top_p": GEN_CFG.get("top_p", 0.9),
-        "max_tokens": GEN_CFG.get("max_tokens", 900),
-        # Ask for strict JSON if the provider supports it (OpenAI-compatible param).
+        "max_tokens": GEN_CFG.get("max_tokens", 700),
         "response_format": {"type": "json_object"},
     }
 
@@ -198,24 +250,21 @@ def query_llm_with_code(code: str, language: str) -> str:
     if not text:
         return f"❌ Empty response from LLM: {json.dumps(data)[:400]}"
 
-    # Try to extract JSON and normalize it; otherwise, return a JSON fallback
-    # so the UI can render structured sections instead of plain text.
     parsed = _safe_parse_json(text)
     if parsed is not None:
         try:
             normalized = _normalize_result(parsed)
             return json.dumps(normalized)
         except Exception:
-            # Fall through to raw text if normalization fails
             pass
 
-    # Fallback: wrap raw text into the expected JSON shape
     fallback = {
         "summary": text.strip()[:1200],
         "no_changes": False,
         "clean_findings": [],
         "minor_issues": [],
         "major_issues": [],
+        "patches": [],
         "rewritten": "",
         "confidence": 0.0,
     }

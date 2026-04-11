@@ -634,8 +634,13 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
     gpt_clean: List[Any] = []
     gpt_rewrites: List[Dict[str, str]] = []
     for hotspot in file_results[:gpt_hotspots]:
+        flagged_lines = [
+            int(i.get("line", 0)) for i in (hotspot.get("static", {}).get("issues") or [])
+            if i.get("line")
+        ]
         gpt_out = _normalize_gpt_result(
-            query_llm_with_code(_clip_for_llm(hotspot["_content"]), language=hotspot["language"])
+            query_llm_with_code(_clip_for_llm(hotspot["_content"]), language=hotspot["language"],
+                                flagged_lines=flagged_lines or None)
         )
         hotspot["gpt"] = gpt_out
         _aggregate_gpt_issue_items(gpt_out.get("major_issues", []), hotspot["path"], gpt_major, max_items=10)
@@ -647,9 +652,9 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
                 gpt_clean.append(f"{hotspot['path']}: {item}")
             else:
                 gpt_clean.append(item)
-        rw = gpt_out.get("rewritten", "").strip()
-        if rw:
-            gpt_rewrites.append({"path": hotspot["path"], "language": hotspot["language"], "code": rw})
+        patches = gpt_out.get("patches", [])
+        if patches:
+            gpt_rewrites.append({"path": hotspot["path"], "language": hotspot["language"], "patches": patches})
 
     combined_static = {
         "issues": global_issues,

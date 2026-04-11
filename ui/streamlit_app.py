@@ -224,10 +224,24 @@ def render_code_results(out):
     if not major and not minor and clean:
         st.markdown('<div class="sl g">✔ All clear</div>', unsafe_allow_html=True)
         st.markdown("".join(card(i,"g") for i in clean), unsafe_allow_html=True)
-    rw = gpt.get("rewritten","")
-    if rw:
-        st.markdown('<div class="rh">✦ Suggested rewrite</div>', unsafe_allow_html=True)
-        st.code(rw, language=out.get("language","") or None)
+    patches = gpt.get("patches", [])
+    if patches:
+        lang = out.get("language","") or None
+        st.markdown('<div class="rh">✦ Surgical fixes</div>', unsafe_allow_html=True)
+        for p in patches:
+            ln = p.get("line","?")
+            why = p.get("why","")
+            orig = p.get("original","")
+            repl = p.get("replacement","")
+            st.markdown(f'<div class="if" style="margin:.4rem 0 .2rem">Line {ln} — {why}</div>',
+                        unsafe_allow_html=True)
+            ca, cb = st.columns(2)
+            with ca:
+                st.caption("before")
+                st.code(orig, language=lang)
+            with cb:
+                st.caption("after")
+                st.code(repl, language=lang)
     with st.expander("Raw output"):
         ca,cb = st.columns(2)
         with ca: st.caption("Static"); st.json(out.get("static",{}))
@@ -247,10 +261,24 @@ def render_pr_results(out):
                       for h in hs], use_container_width=True, hide_index=True)
     rewrites = out.get("gpt", {}).get("rewrites", [])
     if rewrites:
-        st.markdown('<div class="rh">✦ Suggested rewrites</div>', unsafe_allow_html=True)
+        st.markdown('<div class="rh">✦ Surgical fixes</div>', unsafe_allow_html=True)
         for rw in rewrites:
             st.caption(f"`{rw.get('path','')}`")
-            st.code(rw.get("code", ""), language=rw.get("language") or None)
+            lang = rw.get("language") or None
+            for p in rw.get("patches", []):
+                ln = p.get("line","?")
+                why = p.get("why","")
+                orig = p.get("original","")
+                repl = p.get("replacement","")
+                st.markdown(f'<div class="if" style="margin:.4rem 0 .2rem">Line {ln} — {why}</div>',
+                            unsafe_allow_html=True)
+                ca, cb = st.columns(2)
+                with ca:
+                    st.caption("before")
+                    st.code(orig, language=lang)
+                with cb:
+                    st.caption("after")
+                    st.code(repl, language=lang)
     for f in sorted(out.get("per_file",[]),key=lambda x:int(x.get("issue_count") or 0),reverse=True):
         with st.expander(f"{f.get('path')} · {f.get('issue_count',0)} issues"):
             if not f.get("skipped"): st.json(f.get("static",{}))
