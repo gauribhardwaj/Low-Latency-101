@@ -245,6 +245,12 @@ def render_pr_results(out):
         st.dataframe([{"file":h.get("path"),"lang":h.get("language"),
                        "issues":h.get("issue_count",0),"risk":h.get("risk_points",0)}
                       for h in hs], use_container_width=True, hide_index=True)
+    rewrites = out.get("gpt", {}).get("rewrites", [])
+    if rewrites:
+        st.markdown('<div class="rh">✦ Suggested rewrites</div>', unsafe_allow_html=True)
+        for rw in rewrites:
+            st.caption(f"`{rw.get('path','')}`")
+            st.code(rw.get("code", ""), language=rw.get("language") or None)
     for f in sorted(out.get("per_file",[]),key=lambda x:int(x.get("issue_count") or 0),reverse=True):
         with st.expander(f"{f.get('path')} · {f.get('issue_count',0)} issues"):
             if not f.get("skipped"): st.json(f.get("static",{}))

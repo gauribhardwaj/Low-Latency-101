@@ -632,6 +632,7 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
     gpt_major: List[Any] = []
     gpt_minor: List[Any] = []
     gpt_clean: List[Any] = []
+    gpt_rewrites: List[Dict[str, str]] = []
     for hotspot in file_results[:gpt_hotspots]:
         gpt_out = _normalize_gpt_result(
             query_llm_with_code(_clip_for_llm(hotspot["_content"]), language=hotspot["language"])
@@ -646,6 +647,9 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
                 gpt_clean.append(f"{hotspot['path']}: {item}")
             else:
                 gpt_clean.append(item)
+        rw = gpt_out.get("rewritten", "").strip()
+        if rw:
+            gpt_rewrites.append({"path": hotspot["path"], "language": hotspot["language"], "code": rw})
 
     combined_static = {
         "issues": global_issues,
@@ -663,6 +667,7 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
         "minor_issues": gpt_minor,
         "major_issues": gpt_major,
         "rewritten": "",
+        "rewrites": gpt_rewrites,
         "confidence": 0.65 if file_results else 0.0,
     }
 
