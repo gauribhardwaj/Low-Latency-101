@@ -89,8 +89,10 @@ def _normalize_gpt_result(raw: Any) -> Dict[str, Any]:
         "clean_findings": list(parsed.get("clean_findings", [])),
         "minor_issues": list(parsed.get("minor_issues", [])),
         "major_issues": list(parsed.get("major_issues", [])),
+        "patches": list(parsed.get("patches", [])),
         "rewritten": str(parsed.get("rewritten", "")).strip(),
         "confidence": float(parsed.get("confidence", 0.0)),
+        "_usage": parsed.get("_usage", {}),
     }
 
 
