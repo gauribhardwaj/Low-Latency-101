@@ -128,7 +128,7 @@ def _build_messages(code: str, language: str) -> List[Dict[str, str]]:
         '  "clean_findings": ["..."],\n'
         '  "minor_issues": [{"issue":"...","why":"...","fix":"...","snippet":"..."}],\n'
         '  "major_issues": [{"issue":"...","why":"...","fix":"...","snippet":"..."}],\n'
-        '  "rewritten": "optimized code if meaningful, otherwise empty string",\n'
+        '  "rewritten": "REQUIRED: full rewritten version of the code fixing all issues found above. Must not be empty if any issues were found.",\n'
         '  "confidence": 0.0\n'
         "}\n\n"
         "Code:\n"
