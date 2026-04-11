@@ -242,6 +242,15 @@ def render_code_results(out):
             with cb:
                 st.caption("after")
                 st.code(repl, language=lang)
+    usage = gpt.get("_usage", {})
+    if usage:
+        pt = usage.get("prompt_tokens", 0)
+        ct = usage.get("completion_tokens", 0)
+        cost = usage.get("cost_usd", 0)
+        st.markdown(
+            f'<div style="font-size:.62rem;color:#484f58;font-family:monospace;margin:.5rem 0">'
+            f'⬡ {pt+ct} tokens ({pt} in / {ct} out) · ${cost:.5f} per query</div>',
+            unsafe_allow_html=True)
     with st.expander("Raw output"):
         ca,cb = st.columns(2)
         with ca: st.caption("Static"); st.json(out.get("static",{}))

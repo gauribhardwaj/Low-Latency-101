@@ -250,10 +250,21 @@ def query_llm_with_code(code: str, language: str, flagged_lines: Optional[List[i
     if not text:
         return f"❌ Empty response from LLM: {json.dumps(data)[:400]}"
 
+    # Extract token usage and estimate cost (DeepSeek v3 pricing)
+    usage = data.get("usage") or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    cost_usd = (prompt_tokens * 0.27 + completion_tokens * 1.10) / 1_000_000
+
     parsed = _safe_parse_json(text)
     if parsed is not None:
         try:
             normalized = _normalize_result(parsed)
+            normalized["_usage"] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": round(cost_usd, 6),
+            }
             return json.dumps(normalized)
         except Exception:
             pass
@@ -267,5 +278,6 @@ def query_llm_with_code(code: str, language: str, flagged_lines: Optional[List[i
         "patches": [],
         "rewritten": "",
         "confidence": 0.0,
+        "_usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "cost_usd": round(cost_usd, 6)},
     }
     return json.dumps(fallback)
