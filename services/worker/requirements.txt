@@ -1,3 +1,6 @@
 redis
 requests
 python-dotenv
+javalang
+tree-sitter>=0.22.0
+tree-sitter-cpp>=0.22.0

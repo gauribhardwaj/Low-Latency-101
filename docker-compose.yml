@@ -22,7 +22,7 @@ services:
     env_file:
       - .env
     environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN-}
 
   api:
     build:

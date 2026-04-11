@@ -41,6 +41,19 @@ class RepoSearchRequest(BaseModel):
     per_page: int = 20
 
 
+class CompareReq(BaseModel):
+    repo_url: str
+    base: str
+    head: str
+
+
+class FileReq(BaseModel):
+    repo_url: str
+    ref: str
+    path: str
+    max_bytes: int = 0
+
+
 def _repo_value(repo: Optional[str], repo_url: Optional[str]) -> str:
     value = (repo or repo_url or "").strip()
     if not value:
@@ -77,6 +90,7 @@ def _github_headers() -> Dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "low-latency-101-mcp",
     }
     token = (os.getenv("GITHUB_TOKEN") or "").strip()
     if token:
@@ -181,6 +195,50 @@ def get_file(repo_value: str, ref: str, path: str, max_bytes: int) -> Dict[str, 
     }
 
 
+def compare_commits(repo_url: str, base: str, head: str) -> Dict[str, Any]:
+    try:
+        owner, repo = _parse_repo(repo_url)
+    except HTTPException:
+        raise HTTPException(status_code=400, detail="Invalid GitHub repo URL")
+
+    try:
+        data = _github_get(f"/repos/{owner}/{repo}/compare/{base}...{head}")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail="Compare not found (check base/head)")
+        if exc.status_code == 403:
+            raise HTTPException(status_code=403, detail="Rate limited by GitHub (set GITHUB_TOKEN)")
+        raise
+
+    files = [
+        {
+            "filename": item.get("filename"),
+            "status": item.get("status"),
+            "additions": item.get("additions"),
+            "deletions": item.get("deletions"),
+            "changes": item.get("changes"),
+        }
+        for item in data.get("files", [])
+    ]
+    return {
+        "base": data.get("base_commit", {}).get("sha"),
+        "head": data.get("head_commit", {}).get("sha"),
+        "files": files,
+    }
+
+
+def get_file_content(repo_url: str, ref: str, path: str, max_bytes: int) -> Dict[str, Any]:
+    try:
+        file_payload = get_file(repo_url, ref, path, max_bytes)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        if exc.status_code == 403:
+            raise HTTPException(status_code=403, detail="Rate limited by GitHub (set GITHUB_TOKEN)")
+        raise
+    return {"path": path, "ref": ref, "content": file_payload.get("content", "")}
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -245,6 +303,16 @@ def repo_search(req: RepoSearchRequest) -> Dict[str, Any]:
             for item in items
         ],
     }
+
+
+@app.post("/compare")
+def compare(req: CompareReq) -> Dict[str, Any]:
+    return compare_commits(req.repo_url, req.base, req.head)
+
+
+@app.post("/file")
+def file(req: FileReq) -> Dict[str, Any]:
+    return get_file_content(req.repo_url, req.ref, req.path, req.max_bytes)
 
 
 # Tool-style aliases.

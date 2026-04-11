@@ -47,6 +47,31 @@ def _mcp_github_post(path: str, payload: Dict[str, Any], timeout_sec: int = 30) 
     return resp.json()
 
 
+def gh_compare(repo_url: str, base: str, head: str) -> Dict[str, Any]:
+    return _mcp_github_post(
+        "/compare",
+        {
+            "repo_url": repo_url,
+            "base": base,
+            "head": head,
+        },
+        timeout_sec=40,
+    )
+
+
+def gh_get_file(repo_url: str, ref: str, path: str) -> str:
+    payload = _mcp_github_post(
+        "/file",
+        {
+            "repo_url": repo_url,
+            "ref": ref,
+            "path": path,
+        },
+        timeout_sec=40,
+    )
+    return str(payload.get("content") or "")
+
+
 def _normalize_gpt_result(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         parsed = raw
@@ -317,6 +342,178 @@ def _aggregate_gpt_issue_items(items: List[Any], path: str, bucket: List[Any], m
             bucket.append({"file": path, "issue": str(item)})
 
 
+def _analyze_github_pr_diff(
+    mode: str,
+    language: str,
+    context: Dict[str, Any],
+    runbook: Dict[str, Any],
+) -> Dict[str, Any]:
+    repo_url = str(context.get("repo_url", "")).strip()
+    base = str(context.get("base", "")).strip()
+    head = str(context.get("head", "")).strip()
+
+    if not repo_url:
+        raise ValueError("context.repo_url is required for github_pr source jobs")
+    if not base or not head:
+        raise ValueError("context.base and context.head are required for github_pr source jobs")
+
+    default_exts = [".py", ".java", ".cpp"]
+    extensions = _normalize_extensions(context.get("extensions", default_exts))
+    if not extensions:
+        extensions = default_exts
+
+    max_files = max(1, int(context.get("max_files") or DEFAULT_MAX_FILES))
+    max_bytes = max(1, int(context.get("max_bytes") or 200000))
+    gpt_hotspots = max(1, int(context.get("gpt_hotspots") or DEFAULT_GPT_HOTSPOTS))
+
+    cmp = gh_compare(repo_url, base, head)
+    base_sha = str(cmp.get("base") or base)
+    head_sha = str(cmp.get("head") or head)
+
+    changed_all = [
+        str(item.get("filename"))
+        for item in cmp.get("files", [])
+        if str(item.get("status", "")).lower() != "removed"
+    ]
+    changed_filtered = [
+        path
+        for path in changed_all
+        if path and _path_has_extension(path, extensions)
+    ]
+    changed_selected = changed_filtered[:max_files]
+
+    analyzer_cache: Dict[str, LatencyAnalyzer] = {}
+    per_file: List[Dict[str, Any]] = []
+    content_cache: Dict[str, str] = {}
+
+    for path in changed_selected:
+        try:
+            content = gh_get_file(repo_url, head_sha, path)
+        except Exception as exc:
+            per_file.append(
+                {
+                    "path": path,
+                    "skipped": True,
+                    "reason": f"fetch_failed: {exc}",
+                }
+            )
+            continue
+
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > max_bytes:
+            per_file.append(
+                {
+                    "path": path,
+                    "skipped": True,
+                    "reason": "file too large",
+                    "bytes": content_bytes,
+                }
+            )
+            continue
+
+        lang = _language_for_path(path)
+        if not lang:
+            per_file.append(
+                {
+                    "path": path,
+                    "skipped": True,
+                    "reason": "unsupported_extension",
+                }
+            )
+            continue
+        analyzer = analyzer_cache.get(lang)
+        if analyzer is None:
+            analyzer = LatencyAnalyzer(language=lang)
+            analyzer_cache[lang] = analyzer
+
+        try:
+            static_out = analyzer.analyze(content)
+        except Exception as exc:
+            per_file.append(
+                {
+                    "path": path,
+                    "language": lang,
+                    "skipped": True,
+                    "reason": f"analysis_failed: {exc}",
+                }
+            )
+            continue
+        issue_count = len(static_out.get("issues", []))
+        major_count = len([i for i in static_out.get("issues", []) if _severity_from_issue(i) == "major"])
+        minor_count = len([i for i in static_out.get("issues", []) if _severity_from_issue(i) == "minor"])
+
+        per_file.append(
+            {
+                "path": path,
+                "language": lang,
+                "skipped": False,
+                "bytes": content_bytes,
+                "issue_count": issue_count,
+                "major_count": major_count,
+                "minor_count": minor_count,
+                "risk_points": _file_risk_points(issue_count, major_count, minor_count),
+                "static": static_out,
+            }
+        )
+        content_cache[path] = content
+
+    analyzed_files = [item for item in per_file if not item.get("skipped")]
+    issues_count = sum(int(item.get("issue_count", 0) or 0) for item in analyzed_files)
+    majorish = sum(int(item.get("major_count", 0) or 0) for item in analyzed_files)
+
+    top_files = sorted(analyzed_files, key=lambda item: int(item.get("issue_count", 0) or 0), reverse=True)[
+        :gpt_hotspots
+    ]
+    if top_files:
+        summary_blob = "\n\n".join(
+            [
+                f"FILE: {item['path']}\nCODE:\n{content_cache.get(item['path'], '')[:4000]}"
+                for item in top_files
+            ]
+        )
+    else:
+        summary_blob = "No analyzable files found in diff."
+
+    gpt_lang = str(top_files[0].get("language", language)) if top_files else language
+    gpt_out = _normalize_gpt_result(query_llm_with_code(_clip_for_llm(summary_blob), language=gpt_lang))
+
+    risk_score = min(100, issues_count * 10 + majorish * 20)
+    gate = "FAIL" if risk_score >= 50 else "WARN" if risk_score >= 25 else "PASS"
+
+    hotspots = sorted(
+        [
+            {
+                "path": item.get("path"),
+                "language": item.get("language", language),
+                "issue_count": int(item.get("issue_count", 0) or 0),
+                "major_count": int(item.get("major_count", 0) or 0),
+                "minor_count": int(item.get("minor_count", 0) or 0),
+                "risk_points": int(item.get("risk_points", 0) or 0),
+            }
+            for item in analyzed_files
+        ],
+        key=lambda item: (item["issue_count"], item["major_count"], item["minor_count"]),
+        reverse=True,
+    )
+
+    return {
+        "mode": mode,
+        "source": "github_pr",
+        "gate": gate,
+        "risk_score": risk_score,
+        "repo": repo_url,
+        "base": base_sha,
+        "head": head_sha,
+        "changed_files": changed_selected,
+        "per_file": per_file,
+        "hotspots": hotspots,
+        "top_actions": _build_top_actions(analyzed_files, gpt_out),
+        "gpt": gpt_out,
+        "runbook_rules_loaded": len(runbook.get("rules", [])),
+        "context": context,
+    }
+
+
 def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, Any]) -> Dict[str, Any]:
     repo_url = str(context.get("repo_url", "")).strip()
     if not repo_url:
@@ -538,7 +735,14 @@ def run_one(job_id: str) -> None:
         runbook = mcp_get_runbook_rules()
         source = str((context or {}).get("source", "code")).lower().strip()
 
-        if source == "github":
+        if source == "github_pr":
+            result = _analyze_github_pr_diff(
+                mode=mode,
+                language=language,
+                context=context,
+                runbook=runbook,
+            )
+        elif source == "github":
             result = _analyze_github_repo(mode=mode, context=context, runbook=runbook)
         else:
             result = _analyze_inline_code(
