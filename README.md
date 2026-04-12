@@ -26,6 +26,15 @@ Active branch: `engine-refactor` — backend on Railway · frontend on Streamlit
 ## 🏗 Architecture
 
 ```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  THREE MODES                                                            │
+│                                                                         │
+│  1. Paste Code    → static AST analysis + LLM surgical patches         │
+│  2. GitHub PR     → per-file analysis across entire diff               │
+│  3. Production    → attach to live PID → hotspot map → LLM fixes       │
+│     Profiler        (Option A: CLI  |  Option B: speedscope upload)    │
+└─────────────────────────────────────────────────────────────────────────┘
+
 Streamlit UI  →  FastAPI (API :8000)  →  Redis queue  →  Worker
                                                            ├── Static analyzer
                                                            │     Python: built-in ast
@@ -37,6 +46,8 @@ Streamlit UI  →  FastAPI (API :8000)  →  Redis queue  →  Worker
                                                                  · snippet-only input (not full file)
                                                                  · returns surgical line-level patches
                                                                  · ~$0.0001–0.0003 per query
+
+Profiler Agent (local) → py-spy → speedscope JSON → hotspots + source context → API → Worker → LLM
 ```
 
 ---
@@ -208,6 +219,69 @@ In the UI switch to **GitHub PR Diff** and enter:
 - Base: `main`
 - Head: `engine-refactor`
 
+### Production Profiler test (Option A — CLI)
+
+Run a dummy slow Python process in one terminal:
+
+```bash
+python -c "
+import time
+def slow():
+    while True:
+        x = [i*i for i in range(10000)]
+        time.sleep(0.01)
+slow()
+"
+```
+
+In another terminal, find its PID and profile it:
+
+```bash
+# Windows
+tasklist | findstr python
+
+# macOS/Linux
+pgrep -f slow
+
+# Run profiler (uses Railway API — no local Docker needed)
+python services/profiler/profiler_agent.py \
+  --pid <PID> \
+  --duration 15 \
+  --api https://api-production-0435.up.railway.app
+```
+
+Expected output:
+```
+[profiler] Recording PID 12345 for 15s...
+[profiler] Parsing hotspots...
+[profiler] Top 5 hotspots:
+   78.3%  slow  (/path/slow.py:3)
+   ...
+[profiler] Submitting to https://api-production-0435.up.railway.app...
+[profiler] Job queued: abc123
+[profiler] Waiting for analysis..........
+
+======================================================================
+  LOW LATENCY 101 — PRODUCTION PROFILE ANALYSIS
+======================================================================
+  Summary: List comprehension in tight loop causes GC pressure
+
+  [1] 78.3%  slow  (/path/slow.py:3)
+       WHY:   Creating a new 10k-element list every 10ms...
+       FIX:   Pre-allocate once outside the loop...
+       PATCH: x = list(range(10000))  # pre-allocate once
+======================================================================
+```
+
+### Production Profiler test (Option B — speedscope upload)
+
+```bash
+# Generate a speedscope file from any Python process
+py-spy record --pid <PID> --format speedscope --output profile.json --duration 15
+```
+
+Then go to https://low-latency-101.streamlit.app → **Production Profiler** tab → upload `profile.json` → Analyze.
+
 ---
 
 ## 📁 Repo Layout
@@ -215,20 +289,24 @@ In the UI switch to **GitHub PR Diff** and enter:
 ```
 core/
   latency_engine/
-    detectors.py       # AST-based issue detection per language
-    gpt_review.py      # Snippet extraction + LLM prompt + patch output
-    engine.py          # Orchestrator
+    detectors.py       # AST-based issue detection (Python ast / javalang / tree-sitter-cpp)
+    gpt_review.py      # Snippet extraction + LLM prompt + surgical patch output
+    engine.py          # Orchestrator — calls detector, returns issues + score
 
 services/
   api/                 # FastAPI — job submit & poll (port 8000)
-  worker/              # Long-running worker — Redis consumer
+  worker/              # Long-running worker — Redis consumer, runs analysis
+  profiler/
+    profiler_agent.py  # CLI — attaches to live PID via py-spy, submits hotspots to API
+    requirements.txt   # py-spy, requests
 
 mcp/
   runbook/             # Latency rules YAML served as API (port 8787)
   github/              # GitHub repo/PR file fetcher (port 8788)
 
 ui/
-  streamlit_app.py     # Two-panel Streamlit frontend
+  streamlit_app.py     # Three-mode Streamlit frontend
+                       #   Paste Code | GitHub PR Diff | Production Profiler
 
 docker-compose.yml     # Local dev — all 5 services
 render.yaml            # Render cloud deployment config
@@ -240,7 +318,8 @@ requirements.txt       # UI-only deps (Streamlit, requests)
 
 ## 🔑 All Environment Variables
 
-| Variable | Service | Required | Default | Description |
+| Variable | Service | Required | Default | Description | 
+
 |---|---|---|---|---|
 | `OPENROUTER_API_KEY` | Worker | ✅ | — | LLM API key — get at openrouter.ai |
 | `GITHUB_TOKEN` | MCP GitHub | Optional | — | GitHub PAT for higher rate limits |
@@ -265,6 +344,55 @@ requirements.txt       # UI-only deps (Streamlit, requests)
 5. Set env vars on each service — copy the Redis URL from the Redis service into API and Worker
 6. On the Worker service add `OPENROUTER_API_KEY`
 7. Copy the API public URL → go to [Streamlit Cloud](https://share.streamlit.io) → your app → Settings → Secrets → add `API_BASE = "https://your-api-url"`
+
+---
+
+## 🔬 Production Profiler — Full Reference
+
+### Option A — CLI (attaches to live process)
+
+```bash
+# Install once
+pip install py-spy requests
+
+# Profile any running Python process
+python services/profiler/profiler_agent.py \
+  --pid <PID> \
+  --lang python \
+  --duration 30 \
+  --top-n 5 \
+  --api https://api-production-0435.up.railway.app
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--pid` | required | PID of the target Python process |
+| `--lang` | `python` | Language (only `python` in Phase A) |
+| `--duration` | `30` | Profiling duration in seconds |
+| `--top-n` | `5` | Number of hotspots to analyze |
+| `--api` | `http://localhost:8000` | API base URL (use Railway URL for cloud) |
+| `--no-source` | off | Skip reading local source files |
+
+**Platform notes:**
+- **macOS**: works without sudo if target process is owned by same user
+- **Linux**: run as root OR `sudo setcap cap_sys_ptrace=eip $(which py-spy)`
+- **Windows**: run as Administrator
+
+`--nonblocking` is always used — py-spy reads stack frames without pausing the target process (safe for production).
+
+### Option B — Upload speedscope JSON (UI)
+
+```bash
+# Generate speedscope file
+py-spy record --pid <PID> --format speedscope --output profile.json --duration 30 --nonblocking
+```
+
+Upload `profile.json` in the **Production Profiler** tab at https://low-latency-101.streamlit.app
+
+### Coming in Phase B
+- Java: `jfr_agent.py` with async-profiler / JFR
+- C++: `perf_agent.py` with `perf script` / eBPF
+- Flame graph visualization in UI
 
 ---
 
