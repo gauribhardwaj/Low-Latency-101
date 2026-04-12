@@ -7,6 +7,12 @@ from typing import Any, Dict, List
 import requests
 import streamlit as st
 
+try:
+    import plotly.graph_objects as go
+    HAS_PLOTLY = True
+except ImportError:
+    HAS_PLOTLY = False
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -321,50 +327,133 @@ def render_pr_results(out):
             if not f.get("skipped"): st.json(f.get("static",{}))
     with st.expander("Full LLM output"): st.json(out.get("gpt",{}))
 
+def _bar_color(pct):
+    if float(pct) >= 60: return "#f85149"
+    if float(pct) >= 25: return "#e3b341"
+    return "#3fb950"
+
+def render_flame_chart(hotspots):
+    if not HAS_PLOTLY:
+        return
+    fns    = [h["function"][:38] for h in reversed(hotspots)]
+    pcts   = [h["pct_samples"] for h in reversed(hotspots)]
+    colors = [_bar_color(p) for p in pcts]
+    fig = go.Figure(go.Bar(
+        x=pcts, y=fns, orientation="h",
+        marker_color=colors,
+        text=[f"{p}%" for p in pcts], textposition="outside",
+        textfont=dict(family="monospace", size=10, color="#8b949e"),
+        hovertemplate="<b>%{y}</b><br>%{x:.1f}% CPU<extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+        margin=dict(l=0, r=50, t=6, b=6),
+        height=max(140, len(hotspots) * 38),
+        xaxis=dict(range=[0,115], showgrid=True, gridcolor="#161b22",
+                   tickfont=dict(family="monospace", size=9, color="#484f58"),
+                   ticksuffix="%", zeroline=False, showline=False),
+        yaxis=dict(tickfont=dict(family="monospace", size=10, color="#8b949e"),
+                   showgrid=False, zeroline=False, showline=False),
+        bargap=0.38, showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
 def render_profile_results(out: dict):
-    summary = out.get("summary","")
-    fixes   = out.get("hotspot_fixes",[])
-    usage   = out.get("_usage",{})
-    lang    = out.get("language","") or None
+    fixes  = out.get("hotspot_fixes", [])
+    usage  = out.get("_usage", {})
+    lang   = out.get("language", "") or None
+    summary = out.get("summary", "")
+
+    # ── Metric cards ──────────────────────────────────────────────────────
+    pt   = usage.get("prompt_tokens", 0)
+    ct   = usage.get("completion_tokens", 0)
+    cost = usage.get("cost_usd", 0)
+    top_pct = fixes[0]["pct_samples"] if fixes else "—"
+    top_fn  = (fixes[0]["function"] or "")[:20] if fixes else "—"
+    col = _bar_color(top_pct) if fixes else "#484f58"
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.75rem 1rem;text-align:center">'
+            f'<div style="font-size:1.7rem;font-weight:900;font-family:monospace;color:{col}">'
+            f'{top_pct}%</div>'
+            f'<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;color:#484f58;'
+            f'font-family:monospace;text-transform:uppercase;margin-top:.2rem">top bottleneck</div>'
+            f'<div style="font-size:.62rem;color:#30363d;font-family:monospace;'
+            f'margin-top:.15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+            f'{top_fn}</div></div>',
+            unsafe_allow_html=True)
+    with m2:
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.75rem 1rem;text-align:center">'
+            f'<div style="font-size:1.7rem;font-weight:900;font-family:monospace;color:#e3b341">'
+            f'{len(fixes)}</div>'
+            f'<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;color:#484f58;'
+            f'font-family:monospace;text-transform:uppercase;margin-top:.2rem">hotspots</div>'
+            f'<div style="font-size:.62rem;color:#30363d;font-family:monospace;margin-top:.15rem">'
+            f'{pt+ct} tokens</div></div>',
+            unsafe_allow_html=True)
+    with m3:
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.75rem 1rem;text-align:center">'
+            f'<div style="font-size:1.7rem;font-weight:900;font-family:monospace;color:#3fb950">'
+            f'${cost:.5f}</div>'
+            f'<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;color:#484f58;'
+            f'font-family:monospace;text-transform:uppercase;margin-top:.2rem">query cost</div>'
+            f'<div style="font-size:.62rem;color:#30363d;font-family:monospace;margin-top:.15rem">'
+            f'{pt} in / {ct} out</div></div>',
+            unsafe_allow_html=True)
+
+    st.markdown('<div style="height:.5rem"></div>', unsafe_allow_html=True)
 
     if summary:
-        st.markdown(f'<div class="if" style="color:#e6edf3;margin-bottom:.75rem">{summary}</div>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;'
+            f'padding:.65rem .9rem;font-size:.78rem;color:#8b949e;font-family:monospace;'
+            f'line-height:1.6;margin-bottom:.6rem">{summary}</div>',
+            unsafe_allow_html=True)
 
+    # ── Flame chart ───────────────────────────────────────────────────────
     if fixes:
-        st.markdown('<div class="sl c">⬤ Hotspot Analysis</div>', unsafe_allow_html=True)
-        st.dataframe([{
-            "% cpu": f"{f.get('pct_samples','?')}%",
-            "function": f.get("function","?"),
-            "file": (f.get("file") or "")[-45:],
-            "line": f.get("line","?"),
-        } for f in fixes], use_container_width=True, hide_index=True)
+        st.markdown('<div class="sl c">⬤ CPU Time</div>', unsafe_allow_html=True)
+        render_flame_chart(fixes)
 
+    # ── Fix cards ─────────────────────────────────────────────────────────
+    if fixes:
+        st.markdown('<div class="sl c">⬤ Fixes</div>', unsafe_allow_html=True)
         for fix in fixes:
-            fn  = fix.get("function","?")
-            pct = fix.get("pct_samples","?")
-            why = fix.get("why","")
-            how = fix.get("fix","")
-            patch = fix.get("patch","")
-            with st.expander(f"[{pct}%]  {fn}"):
-                if why:
-                    st.markdown(f'<div class="if">WHY: {why}</div>', unsafe_allow_html=True)
-                if how:
-                    st.markdown(f'<div class="if" style="margin-top:.4rem">FIX: {how}</div>',
-                                unsafe_allow_html=True)
-                if patch:
-                    st.markdown('<div class="rh">✦ Patch</div>', unsafe_allow_html=True)
-                    st.code(patch, language=lang)
+            fn    = fix.get("function", "?")
+            pct   = fix.get("pct_samples", "?")
+            fp    = fix.get("file", "") or ""
+            ln    = fix.get("line", "")
+            why   = fix.get("why", "")
+            how   = fix.get("fix", "")
+            patch = fix.get("patch", "")
+            c     = _bar_color(pct)
+            loc   = f"{fp}:{ln}" if fp and fp != "<string>" else ""
+            st.markdown(
+                f'<div style="background:#161b22;border:1px solid #21262d;'
+                f'border-left:3px solid {c};border-radius:8px;'
+                f'padding:.75rem .9rem;margin-bottom:.5rem">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center">'
+                f'<span style="font-weight:700;color:#e6edf3;font-family:monospace;font-size:.85rem">{fn}</span>'
+                f'<span style="font-weight:900;font-family:monospace;color:{c}">{pct}%</span></div>'
+                + (f'<div style="font-size:.68rem;color:#484f58;font-family:monospace;margin:.2rem 0 .4rem">{loc}</div>' if loc else "")
+                + (f'<div style="font-size:.6rem;font-weight:800;color:#e3b341;font-family:monospace;letter-spacing:.1em;text-transform:uppercase;margin:.45rem 0 .15rem">WHY</div><div style="font-size:.78rem;color:#8b949e;line-height:1.55">{why}</div>' if why else "")
+                + (f'<div style="font-size:.6rem;font-weight:800;color:#00d4ff;font-family:monospace;letter-spacing:.1em;text-transform:uppercase;margin:.45rem 0 .15rem">FIX</div><div style="font-size:.78rem;color:#8b949e;line-height:1.55">{how}</div>' if how else "")
+                + '</div>',
+                unsafe_allow_html=True)
+            if patch and patch.strip() not in ("pass", ""):
+                st.markdown('<div class="rh" style="margin:.1rem 0 .2rem">✦ Patch</div>',
+                            unsafe_allow_html=True)
+                st.code(patch, language=lang)
     else:
         st.info("No hotspot fixes returned.")
 
-    if usage:
-        pt = usage.get("prompt_tokens",0); ct = usage.get("completion_tokens",0)
-        cost = usage.get("cost_usd",0)
-        st.markdown(
-            f'<div style="font-size:.62rem;color:#484f58;font-family:monospace;margin:.5rem 0">'
-            f'⬡ {pt+ct} tokens ({pt} in / {ct} out) · ${cost:.5f}</div>',
-            unsafe_allow_html=True)
     with st.expander("Raw output"): st.json(out)
 
 def render_empty():
