@@ -432,7 +432,7 @@ with left:
                     st.session_state.source_tag = "code"
                     st.session_state.err        = None
                 st.rerun()
-    else:
+    elif mode == "GitHub PR Diff":
         repo = st.text_input("Repo URL", placeholder="https://github.com/owner/repo")
         c1,c2 = st.columns(2)
         with c1: base = st.text_input("Base ref", value="main")
