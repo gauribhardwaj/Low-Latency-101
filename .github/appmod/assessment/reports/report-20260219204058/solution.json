@@ -1,0 +1,5 @@
+{
+  "localhost-00004": "bare/local-resource-access",
+  "dockerfile-00000": "containerization-copilot-agent",
+  "hardcoded-ip-address": "bare/remote-communication/hardcode-ip"
+}
