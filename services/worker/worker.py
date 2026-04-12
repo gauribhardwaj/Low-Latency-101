@@ -729,6 +729,122 @@ def _analyze_github_repo(mode: str, context: Dict[str, Any], runbook: Dict[str, 
     }
 
 
+def _analyze_runtime_profile(
+    language: str, context: Dict[str, Any], runbook: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Handle mode=runtime_profile jobs submitted by profiler_agent.py or the UI upload."""
+    from core.latency_engine.gpt_review import (
+        _get_api_key, _get_model, _post_with_retries, _safe_parse_json
+    )
+
+    hotspots = list(context.get("hotspots") or [])
+    if not hotspots:
+        raise ValueError("runtime_profile job requires context.hotspots to be non-empty")
+
+    lang = (language or "python").lower()
+
+    # Clip source context per hotspot to stay within token budget
+    for hs in hotspots:
+        ctx = str(hs.get("source_context") or "")
+        if len(ctx) > 3000:
+            hs["source_context"] = ctx[:3000] + "\n... [truncated]"
+
+    # Build targeted prompt
+    prompt_lines = [
+        f"You are analyzing a LIVE production profile of a {lang} service.",
+        f"The profiler captured {len(hotspots)} hotspots ranked by % CPU time.\n",
+        "For EACH hotspot explain WHY it is slow (root cause) and HOW to fix it.",
+        "Focus on: allocation pressure, I/O in hot paths, lock contention, "
+        "algorithmic complexity, cache misses.\n",
+    ]
+    for i, hs in enumerate(hotspots, 1):
+        prompt_lines.append(f"--- HOTSPOT {i}: {hs.get('pct_samples', '?')}% of samples ---")
+        prompt_lines.append(f"Function: {hs.get('function', '?')}")
+        prompt_lines.append(f"Location: {hs.get('file', '')}:{hs.get('line', '?')}")
+        ctx = (hs.get("source_context") or "").strip()
+        if ctx:
+            prompt_lines.append(f"Source:\n```{lang}\n{ctx}\n```")
+        prompt_lines.append("")
+
+    prompt_lines.append(
+        'Return STRICT JSON:\n'
+        '{\n'
+        '  "summary": "one-sentence overall diagnosis",\n'
+        '  "hotspot_fixes": [\n'
+        '    {\n'
+        '      "function": "...",\n'
+        '      "file": "...",\n'
+        '      "line": <number>,\n'
+        '      "pct_samples": <number>,\n'
+        '      "why": "root cause",\n'
+        '      "fix": "concrete fix",\n'
+        '      "patch": "optional replacement code"\n'
+        '    }\n'
+        '  ],\n'
+        '  "confidence": 0.0\n'
+        '}'
+    )
+    prompt = "\n".join(prompt_lines)
+
+    key = _get_api_key()
+    model = _get_model()
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content":
+             "You are a battle-tested production systems engineer specializing in "
+             "profiling and latency optimization. Return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1200,
+        "top_p": 0.9,
+        "response_format": {"type": "json_object"},
+    }
+
+    resp = _post_with_retries(headers, body)
+    data = resp.json()
+
+    try:
+        text = data["choices"][0]["message"]["content"]
+    except Exception:
+        text = ""
+
+    parsed = _safe_parse_json(text) if text else None
+    if parsed is None:
+        parsed = {"summary": text or "LLM returned empty response",
+                  "hotspot_fixes": [], "confidence": 0.0}
+
+    # Backfill metadata from original hotspots into fixes
+    fixes = list(parsed.get("hotspot_fixes", []))
+    for i, fix in enumerate(fixes):
+        if i < len(hotspots):
+            fix.setdefault("pct_samples", hotspots[i].get("pct_samples"))
+            fix.setdefault("file",        hotspots[i].get("file"))
+            fix.setdefault("line",        hotspots[i].get("line"))
+            fix.setdefault("function",    hotspots[i].get("function"))
+
+    usage = data.get("usage") or {}
+    pt = int(usage.get("prompt_tokens") or 0)
+    ct = int(usage.get("completion_tokens") or 0)
+
+    return {
+        "mode":          "runtime_profile",
+        "source":        "runtime_profile",
+        "language":      lang,
+        "summary":       str(parsed.get("summary", "")),
+        "hotspot_fixes": fixes,
+        "hotspot_count": len(hotspots),
+        "confidence":    float(parsed.get("confidence", 0.0)),
+        "_usage": {
+            "prompt_tokens":    pt,
+            "completion_tokens": ct,
+            "cost_usd":         round((pt * 0.27 + ct * 1.10) / 1_000_000, 6),
+        },
+    }
+
+
 def run_one(job_id: str) -> None:
     job_key = f"job:{job_id}"
     r.hset(job_key, "status", "running")
@@ -756,6 +872,8 @@ def run_one(job_id: str) -> None:
             )
         elif source == "github":
             result = _analyze_github_repo(mode=mode, context=context, runbook=runbook)
+        elif source == "runtime_profile":
+            result = _analyze_runtime_profile(language=language, context=context, runbook=runbook)
         else:
             result = _analyze_inline_code(
                 language=language,

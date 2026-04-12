@@ -1,6 +1,8 @@
+import json
 import logging
 import os
 import time
+from typing import Any, Dict, List
 
 import requests
 import streamlit as st
@@ -162,6 +164,32 @@ def submit_pr(repo,base,head,max_f,exts):
                    "extensions":exts,"max_bytes":200000}}, timeout=30)
     r.raise_for_status(); return r.json()["job_id"]
 
+def submit_profile(lang: str, hotspots: list) -> str:
+    r = requests.post(f"{API_BASE}/jobs", json={
+        "language": lang.lower(), "code": "", "mode": "runtime_profile",
+        "context": {"source": "runtime_profile", "hotspots": hotspots},
+    }, timeout=30)
+    r.raise_for_status()
+    return r.json()["job_id"]
+
+def parse_speedscope(data: dict, top_n: int = 10) -> List[Dict[str, Any]]:
+    frames  = data["shared"]["frames"]
+    profile = data["profiles"][0]
+    samples = profile["samples"]
+    weights = profile.get("weights", [1] * len(samples))
+    total_w = sum(weights) or 1
+    inclusive: Dict[int, float] = {}
+    for sample, w in zip(samples, weights):
+        seen: set = set()
+        for idx in sample:
+            if idx not in seen:
+                inclusive[idx] = inclusive.get(idx, 0.0) + w
+                seen.add(idx)
+    ranked = sorted(inclusive.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    return [{"function": frames[i].get("name","<unknown>"), "file": frames[i].get("file",""),
+             "line": int(frames[i].get("line") or 0), "pct_samples": round(w/total_w*100,1),
+             "source_context": ""} for i, w in ranked]
+
 def poll(jid, timeout=90):
     end = time.time()+timeout
     while time.time()<end:
@@ -293,6 +321,52 @@ def render_pr_results(out):
             if not f.get("skipped"): st.json(f.get("static",{}))
     with st.expander("Full LLM output"): st.json(out.get("gpt",{}))
 
+def render_profile_results(out: dict):
+    summary = out.get("summary","")
+    fixes   = out.get("hotspot_fixes",[])
+    usage   = out.get("_usage",{})
+    lang    = out.get("language","") or None
+
+    if summary:
+        st.markdown(f'<div class="if" style="color:#e6edf3;margin-bottom:.75rem">{summary}</div>',
+                    unsafe_allow_html=True)
+
+    if fixes:
+        st.markdown('<div class="sl c">⬤ Hotspot Analysis</div>', unsafe_allow_html=True)
+        st.dataframe([{
+            "% cpu": f"{f.get('pct_samples','?')}%",
+            "function": f.get("function","?"),
+            "file": (f.get("file") or "")[-45:],
+            "line": f.get("line","?"),
+        } for f in fixes], use_container_width=True, hide_index=True)
+
+        for fix in fixes:
+            fn  = fix.get("function","?")
+            pct = fix.get("pct_samples","?")
+            why = fix.get("why","")
+            how = fix.get("fix","")
+            patch = fix.get("patch","")
+            with st.expander(f"[{pct}%]  {fn}"):
+                if why:
+                    st.markdown(f'<div class="if">WHY: {why}</div>', unsafe_allow_html=True)
+                if how:
+                    st.markdown(f'<div class="if" style="margin-top:.4rem">FIX: {how}</div>',
+                                unsafe_allow_html=True)
+                if patch:
+                    st.markdown('<div class="rh">✦ Patch</div>', unsafe_allow_html=True)
+                    st.code(patch, language=lang)
+    else:
+        st.info("No hotspot fixes returned.")
+
+    if usage:
+        pt = usage.get("prompt_tokens",0); ct = usage.get("completion_tokens",0)
+        cost = usage.get("cost_usd",0)
+        st.markdown(
+            f'<div style="font-size:.62rem;color:#484f58;font-family:monospace;margin:.5rem 0">'
+            f'⬡ {pt+ct} tokens ({pt} in / {ct} out) · ${cost:.5f}</div>',
+            unsafe_allow_html=True)
+    with st.expander("Raw output"): st.json(out)
+
 def render_empty():
     st.markdown("""
     <div class="es">
@@ -333,7 +407,7 @@ left, right = st.columns([4, 6], gap="medium")
 
 # ── LEFT ─────────────────────────────────────────────────────────────────────
 with left:
-    mode = st.radio("src", ["Paste Code", "GitHub PR Diff"],
+    mode = st.radio("src", ["Paste Code", "GitHub PR Diff", "Production Profiler"],
                     horizontal=True, label_visibility="collapsed")
 
     if mode == "Paste Code":
@@ -383,6 +457,53 @@ with left:
                     st.session_state.err        = None
                 st.rerun()
 
+    else:  # Production Profiler
+        st.markdown("""
+        <div style="background:#0a1220;border:1px solid #30363d;border-radius:8px;padding:.85rem 1rem;margin-bottom:.75rem">
+          <div style="font-size:.65rem;font-weight:800;color:#00d4ff;font-family:monospace;letter-spacing:.1em;margin-bottom:.5rem">OPTION A — CLI (attaches to live process)</div>
+          <div style="font-size:.74rem;color:#8b949e;font-family:monospace;line-height:1.9">
+            Run on the machine where your service is running:<br>
+            <span style="color:#e6edf3">pip install py-spy requests</span><br>
+            <span style="color:#e6edf3">python services/profiler/profiler_agent.py \\<br>
+            &nbsp;&nbsp;--pid &lt;YOUR_PID&gt; --duration 30 \\<br>
+            &nbsp;&nbsp;--api https://api-production-0435.up.railway.app</span>
+          </div>
+        </div>
+        <div style="font-size:.65rem;font-weight:800;color:#484f58;font-family:monospace;letter-spacing:.1em;margin:.7rem 0 .4rem">
+          OPTION B — Upload speedscope JSON
+        </div>
+        """, unsafe_allow_html=True)
+
+        prof_lang = st.selectbox("Language", ["Python", "Java", "C++"], key="prof_lang")
+        uploaded  = st.file_uploader("Speedscope JSON (from py-spy --format speedscope)",
+                                     type=["json"], key="prof_upload")
+
+        if st.button("⚡  Analyze Profile", key="rprof"):
+            if uploaded is None:
+                st.warning("Upload a speedscope JSON file first, or use the CLI above.")
+            else:
+                try:
+                    raw      = json.loads(uploaded.read())
+                    hotspots = parse_speedscope(raw, top_n=10)
+                except Exception as e:
+                    st.error(f"Failed to parse speedscope JSON: {e}")
+                    hotspots = None
+
+                if hotspots:
+                    with st.spinner("Analyzing hotspots with LLM..."):
+                        jid  = submit_profile(prof_lang, hotspots)
+                        resp = poll(jid, 180)
+                    if resp.get("status") == "error":
+                        st.session_state.err    = resp.get("error")
+                        st.session_state.result = None
+                    else:
+                        r = resp.get("result", {})
+                        r["language"] = prof_lang.lower()
+                        st.session_state.result     = r
+                        st.session_state.source_tag = "profile"
+                        st.session_state.err        = None
+                    st.rerun()
+
 # ── RIGHT ─────────────────────────────────────────────────────────────────────
 with right:
     if st.session_state.err:
@@ -391,12 +512,17 @@ with right:
         render_empty()
     else:
         out  = st.session_state.result
-        gate = out.get("gate","WARN")
-        risk = int(out.get("risk_score",0))
-        render_score(gate, risk)
-        if st.session_state.source_tag == "code":
+        if st.session_state.source_tag == "profile":
+            render_profile_results(out)
+        elif st.session_state.source_tag == "code":
+            gate = out.get("gate", "WARN")
+            risk = int(out.get("risk_score", 0))
+            render_score(gate, risk)
             render_code_results(out)
         else:
+            gate = out.get("gate", "WARN")
+            risk = int(out.get("risk_score", 0))
+            render_score(gate, risk)
             render_pr_results(out)
 
 st.markdown('<div style="height:1px;background:#21262d;margin:1rem 0 0"></div>',
